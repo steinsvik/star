@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 14
+VisualStudioVersion = 14.0.23107.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "starCore", "starCore\starCore.csproj", "{55A6EF5C-07B4-4E2E-B7B0-A16F99F0947C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestAndTrial", "TestAndTrial\TestAndTrial.csproj", "{6718BEE9-2C66-4B0E-BCE5-76C88779B81D}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{55A6EF5C-07B4-4E2E-B7B0-A16F99F0947C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{55A6EF5C-07B4-4E2E-B7B0-A16F99F0947C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{55A6EF5C-07B4-4E2E-B7B0-A16F99F0947C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{55A6EF5C-07B4-4E2E-B7B0-A16F99F0947C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6718BEE9-2C66-4B0E-BCE5-76C88779B81D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6718BEE9-2C66-4B0E-BCE5-76C88779B81D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6718BEE9-2C66-4B0E-BCE5-76C88779B81D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6718BEE9-2C66-4B0E-BCE5-76C88779B81D}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		VisualSVNWorkingCopyRoot = .
+	EndGlobalSection
+EndGlobal
