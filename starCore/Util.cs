@@ -13,8 +13,26 @@ using System.Drawing;
 
 namespace Ebs.Star.Core
 {
-    using StarUtil = Ebs.Star.Core.Util;
     using StarApp = Ebs.Star.Core.App;
+    using StarTime = Ebs.Star.Core.Time;
+
+    public static class Time
+    {
+        public static string compactTimeFormat { get; set; } = "HHmmss";
+        public static string compactDateFormat { get; set; } = "yyyyMMdd";
+        public static string compactDateTimeFormat { get; set; } = compactDateFormat + " " + compactTimeFormat;
+        public static string standardDateTimeFormat { get; set; } = "yyyy.MM.dd HH:mm:ss";
+        public static string standardDateTimeFormatWithMs { get; set; } = "yyyy.MM.dd HH:mm:ss.fff";
+        public static string fileNameDateTimeFormat { get; set; } = compactDateTimeFormat;
+        
+        public static int WaitForInterval(int intervalMS, DateTime startTimestamp)
+        {
+            int actualWaitRequestInterval = (((DateTime.Now - startTimestamp).Milliseconds / intervalMS) + 1) * intervalMS -
+                ((DateTime.Now - startTimestamp).Milliseconds);
+            Thread.Sleep(actualWaitRequestInterval);
+            return actualWaitRequestInterval;
+        }
+    }
 
     public static class App
     {
@@ -67,7 +85,7 @@ namespace Ebs.Star.Core
             return listOfAssemblies.ToArray();
         }
 
-        public static string[] GetAllAssemblies(Boolean includeEntryAssembly = false, Boolean includeMicrosoftAssemblies = false, Boolean includeCopyright = false)
+        public static string[] GetAllAssembliesStringArray(Boolean includeEntryAssembly = false, Boolean includeMicrosoftAssemblies = false, Boolean includeCopyright = false)
         {
             Assembly[] assems = GetAllAssemblies(includeEntryAssembly, includeMicrosoftAssemblies); //AppDomain.CurrentDomain.GetAssemblies();
             var listOfAssemblies = new List<string>();
@@ -113,17 +131,6 @@ namespace Ebs.Star.Core
                     break;
             }
             return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\", comp + @"\" + appName + @"\" + sub);
-        }
-    }
-
-    public static class Util
-    {
-        public static int WaitForInterval(int intervalMS, DateTime startTimestamp)
-        {
-            int actualWaitRequestInterval = (((DateTime.Now - startTimestamp).Milliseconds / intervalMS) + 1) * intervalMS -
-                ((DateTime.Now - startTimestamp).Milliseconds);
-            Thread.Sleep(actualWaitRequestInterval);
-            return actualWaitRequestInterval;
         }
     }
 
