@@ -2,56 +2,215 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.IO;
 using System.Threading.Tasks;
 using System.Collections.Concurrent;
 using System.Threading;
 using System.Diagnostics;
 using System.Reflection;
-using Ebs.Star.Core;
+using System.Management;   
+using Microsoft.Win32;    
+using Steinsvik.Star;
 
-namespace Ebs.Star.Core
+namespace Steinsvik.Star
 {
+    /// <summary>
+    /// provides troubleshooting and debug functionality.
+    /// </summary>
     static public class Debug
     {
         public enum Level { Dev, Detail, Normal, Major };
         public enum MessageType { FatalUnHandledExeption, HandledException, Warning, AppEvent, UserAction };
-        // Local members.
+
         private const int messageOverflowLimit = 1000;
         private const int profilingStorageTimeMs = 1000;
-        private const int messageLogBreakTimeMs = 100;
-        private const int trafficLogBreakTimeMs = 100;
-        // Going with regular Q, event though is not thread safe. I have only  one exit. Figure it will be safe...
-        private static readonly Queue<DebugMessageCollected> DebugMessageQueueForSaving = new Queue<DebugMessageCollected>();
-        //private static ConcurrentDictionary<string, string> profilingValues = new ConcurrentDictionary<string, string>();
-        private static ProfilingDictionary profilingValues = new ProfilingDictionary();
+        private const int messageLogBreakTimeMs = 10;
+        private const int trafficLogBreakTimeMs = 10;
 
-        // Public properties.
-        public static Debug.Level debugLevel = Debug.Level.Normal;
-        // Public methods.
-        static public void StartDebugRegistrationEngine(Level debugEngineLevel = Level.Normal)
+        public static Debug.Level DebugLevel { get; set; } = Debug.Level.Normal;
+        private static bool gatherSystemInfo = true;
+        
+        /// <summary> Use to initiate all Debug functionality. Must be called in start of program. </summary>
+        static public void StartDebugRegEngine(Level debugEngineLevel = Level.Normal, bool gatherSystemInfo = true)
         {
+            DebugLevel = debugEngineLevel;
+            Debug.gatherSystemInfo = gatherSystemInfo;
 
-            debugLevel = debugEngineLevel;
-
+            // Provide an unhandled exception hook;
             AppDomain currentDomain = AppDomain.CurrentDomain;
             currentDomain.UnhandledException += new UnhandledExceptionEventHandler(UnhandledExceptionHandler);
 
-            // Document application startup. Asuming always at start of App
-            Debug.LogMsg.AddAppEvent("Application Started", ExtensionsAssembly.GetFullID(Assembly.GetEntryAssembly()), Level.Major);
-            Debug.LogMsg.AddAppEvent("Application Started.Details", Util.GetAllAssemblies(false, true, false).ToDelimetedString("//"), Level.Dev);
-            // Initialising Log part of debug
-            typeof(Debug.LogMsg).GetMethod("init", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, null);
-            // Initialising Profile part of debug
-            typeof(Debug.LogVal).GetMethod("init", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, null);
-            // Initialising system infor part of debug
-            typeof(Debug.SystemInfo).GetMethod("init", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, null);
-            // Starting the traffic message log thread.
-            typeof(Debug.LogTraffic).GetMethod("init", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, null);
+            Debug.AddAppEvent("Application Started", ExtensionsAssembly.GetFullID(Assembly.GetEntryAssembly()), Level.Major);
+            Debug.AddAppEvent("Application Started.Details", App.GetAllAssembliesStringArray(false, true, false).ToDelimetedString("//"), Level.Dev);
 
-            //            Debug.LogMsg.AddAppEvent("Application Started.Configuration", optionSystem.GetAllSettingsForReporting(), Level.Normal);
+            InitMessageHandling();
+            InitDebugValue();
+            InitSystemInfoCollector();
+            InitTraficLogger();
         }
 
-        struct DebugMessageCollected : IcvtStruckt
+        #region debug values
+
+        public class DebugValueHolder
+        {
+            ConcurrentDictionary<string, object> valueHolder = new ConcurrentDictionary<string, object>();
+
+            public void Add(string Name, object Verdi) //where TValue : string, float, bool, int?
+            {
+                valueHolder[Name] = Verdi;
+            }
+
+            public string GetValuePairList()
+            {
+                StringBuilder sb = new StringBuilder("");
+                foreach (KeyValuePair<string, object> KeyVerdi in valueHolder)
+                {
+                    sb.AppendLine(KeyVerdi.Key + ": " + KeyVerdi.Value.ToString());
+                }
+                return sb.ToString();
+            }
+        }
+
+        public static DebugValueHolder profilingValues { get; private set; } = new DebugValueHolder();
+
+        static private void InitDebugValue()
+        {
+        }
+
+        static public void AddDebugValue<T>(string Name, T Verdi) //where TValue : string, float, bool, int?
+        {
+            if (DebugLevel == Level.Dev)
+            {
+                profilingValues.Add(Name, Verdi);
+            }
+        }
+
+        static public void AddDebugValue<T>(this T variableToAdd) //where TValue : string, float, bool, int?
+        {
+            if (DebugLevel == Level.Dev)
+            {
+                profilingValues.Add(Util.GetMemberName(() => variableToAdd), variableToAdd);
+            }
+        }
+        #endregion
+
+        #region debug messages
+        public delegate void NewDebugMessageHandler(object sender, DebugMessage msg);
+        public static event NewDebugMessageHandler NewDebugMessage;
+        // Going with regular Q, event though is not thread safe. I have only  one exit. Figure it will be safe...
+        private static readonly Queue<DebugMessage> DebugMessageQueueForPassingToEvent = new Queue<DebugMessage>();
+
+        static private void InitMessageHandling()
+        {
+            // Starting the debug log thread.
+            Thread debugThread = new Thread(new ThreadStart(DebugMsgLogThread));
+            debugThread.IsBackground = true;
+            debugThread.Start();
+        }
+
+        static public void AddHandledExeption(this Exception errorKode, string name = "", string details = "", Level level = Level.Detail,
+        [System.Runtime.CompilerServices.CallerMemberName] string memberName = "",
+        [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "",
+        [System.Runtime.CompilerServices.CallerLineNumber] int sourceLineNumber = 0)
+        {
+            if (name == "")
+                name = errorKode.Message;
+            AddMessageCore(MessageType.HandledException, name, errorKode.Message + "/n/r" + errorKode.ToString() + "/n/r" + details, level,
+                memberName, sourceFilePath, sourceLineNumber);
+        }
+
+        static public void AddAppEvent(string message, string details, Level level = Level.Dev,
+        [System.Runtime.CompilerServices.CallerMemberName] string memberName = "",
+        [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "",
+        [System.Runtime.CompilerServices.CallerLineNumber] int sourceLineNumber = 0)
+        {
+            AddMessageCore(MessageType.AppEvent, message, details, level, memberName, sourceFilePath, sourceLineNumber);
+        }
+
+        static public void AddUserAction(string message, string details, Level level = Level.Dev,
+        [System.Runtime.CompilerServices.CallerMemberName] string memberName = "",
+        [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "",
+        [System.Runtime.CompilerServices.CallerLineNumber] int sourceLineNumber = 0)
+        {
+            AddMessageCore(MessageType.UserAction, message, details, level, memberName, sourceFilePath, sourceLineNumber);
+        }
+
+        static private void AddFatalUnhandledExeption(Exception errorKode)
+        {
+            var errorDumpSB = new StringBuilder();
+            var profilesSB = new StringBuilder(profilingValues.GetValuePairList());
+            AddMessageCore(MessageType.FatalUnHandledExeption, errorKode.Message, errorKode.ToString()
+                , Level.Major, "", "", 0);
+            AddAppEvent("Application Exit with error", errorKode.Message + "\r\nCurrent gathered value log values:\r\n" + profilesSB.ToString(), Level.Major);
+
+            errorDumpSB.AppendLine("Application terminated with unhandled exception");
+            errorDumpSB.AppendLine(App.GetEntryAssembly().GetFullID());
+            errorDumpSB.AppendLine("");
+            errorDumpSB.Append("Error message:" + errorKode.Message);
+            errorDumpSB.AppendLine("");
+            errorDumpSB.Append(errorKode.ToString());
+            errorDumpSB.AppendLine("");
+            errorDumpSB.AppendLine(" ");
+            errorDumpSB.AppendLine("Assembly information:");
+            errorDumpSB.AppendLine(App.GetAllAssembliesStringArray().ToDelimetedString(Environment.NewLine));
+            errorDumpSB.AppendLine(" ");
+            errorDumpSB.AppendLine("System information gathered at start:");
+            errorDumpSB.AppendLine(Debug.GetSystemInfo());
+            errorDumpSB.AppendLine("Current gathered value log values:");
+            errorDumpSB.AppendLine(profilingValues.GetValuePairList());
+            //errorBumpSB.AppendLine("Application configuration:");
+            //errorBumpSB.AppendLine(optionSystem.GetAllSettingsForReporting());
+        }
+
+        static private void DebugMsgLogThread()
+        {
+            // DebugMessageCollected outResult;
+            // PerpetualCVTLogFile debugFile = new PerpetualCVTLogFile(PostScript: "Debug Log Message", filType: FileType.Debug);
+            while (true)
+            {
+                int numbMsgInQue = Debug.DebugMessageQueueForPassingToEvent.Count;
+                if (numbMsgInQue >= messageOverflowLimit)
+                {
+                    Debug.DebugMessageQueueForPassingToEvent.Clear();
+                    Debug.AddHandledExeption(new InternalBufferOverflowException(), "Debug message queue overflow.", "Limit: " +
+                            messageOverflowLimit.ToString() + ". Items found and removed: " + numbMsgInQue.ToString(), Level.Major);
+                    numbMsgInQue = Debug.DebugMessageQueueForPassingToEvent.Count;
+                }
+                if (NewDebugMessage != null)
+                {
+                    if (numbMsgInQue > 0)
+                    {
+                        for (int i = 0; i < numbMsgInQue; i++)
+                        {
+                            NewDebugMessage(null, DebugMessageQueueForPassingToEvent.Dequeue());
+                        }
+                    }
+                }
+                Thread.Sleep(messageLogBreakTimeMs); 
+            }
+        }
+
+        static private void AddMessageCore(MessageType type, string message, string details, Level level,
+            string memberName, string sourceFilePath, int sourceLineNumber)
+        {
+            if (level >= DebugLevel)
+            {
+                Debug.DebugMessageQueueForPassingToEvent.Enqueue(new DebugMessage(type, level, DateTime.Now, message, details,
+                    Path.GetFileName(sourceFilePath), sourceLineNumber, memberName));
+            }
+        }
+        #endregion
+
+        #region traffic messages
+        public enum TrafficValidity { Unknown, Invalid, Valid }
+        public enum TrafficDirection { In, Out, Up, Down, A, B, Unknown };  //Direction should be an enum, as decoder might need the information
+        public delegate void NewTrafficMessageHandler(object sender, TrafficMessage msg);
+        public static event NewTrafficMessageHandler NewTrafficMessage;
+        public static readonly Queue<TrafficMessage> TrafficMessageQueueForSaving = new Queue<TrafficMessage>();
+        public delegate void TrafficMsgDecoder(byte[] rawData, TrafficDirection direction, out TrafficValidity valid, out string sourceAdr,
+            out string targetAdr, out string command, out string detail, out string checkSum);
+
+        public struct DebugMessage
         {
             MessageType MessageType;
             Level MessageLevel;
@@ -61,7 +220,7 @@ namespace Ebs.Star.Core
             string SourceFile;
             int SourceLine;
             string SourceMemberName;
-            public DebugMessageCollected(MessageType type, Level level, DateTime timestamp, string message, string details,
+            public DebugMessage(MessageType type, Level level, DateTime timestamp, string message, string details,
                     string filePath, int sourceLineNumber, string memberName)
             {
                 this.MessageType = type;
@@ -73,545 +232,288 @@ namespace Ebs.Star.Core
                 this.SourceLine = sourceLineNumber;
                 this.SourceMemberName = memberName;
             }
-            public string GetCVTFileHeader()
-            {
-                return "Time\tType\tLevel\tMessage\tDetails\tSource";
-            }
-            public int GetCVTNumbCols()
-            {
-                return 6;
-            }
-            public string GetCVTFileString()
-            {
-                return this.Timestamp.ToString(TimeFormat.standardDateTimeFormatWithMs) + "\t" +
-                    this.MessageType.ToString() + "\t" + this.MessageLevel.ToString() + "\t" +
-                    this.Message + "\t" + this.Details.Replace("\r\n", "//").Replace("\n", "//") + "\t" +
-                    this.SourceFile + "(" + this.SourceLine.ToString() + ") " + this.SourceMemberName;
-            }
         }
-        class ProfilingDictionary : IcvtStruckt
-        {
-            private ConcurrentDictionary<string, string> actualConcurrentDictionatry;// = new ConcurrentDictionary<string, string>();
 
-            public ProfilingDictionary()
+        public struct TrafficMessage 
+        {
+            DateTime timestamp;
+            string trafficType;
+            byte[] rawData;
+            string sourceInterface;
+            TrafficDirection direction;
+            TrafficMsgDecoder decodeMessage;
+            string additionalInformation;
+
+            public TrafficMessage(string trafficType, byte[] rawData, DateTime ?timestamp = null, string sourceInterface = "",
+                TrafficDirection direction = TrafficDirection.Unknown, TrafficMsgDecoder decodeMessage = null, string additionalInfo = "")
             {
-                actualConcurrentDictionatry = new ConcurrentDictionary<string, string>();
-            }
-            public void Add<TValue>(string Name, TValue Verdi) //where TValue : string, float, bool, int?
-            {
-                actualConcurrentDictionatry[Name] = Verdi.ToString();
-            }
-            public string GetCVTFileHeader()
-            {
-                StringBuilder sb = new StringBuilder("Time\t");
-                foreach (KeyValuePair<string, string> KeyVerdi in this.actualConcurrentDictionatry)
-                {
-                    sb.Append(KeyVerdi.Key + "\t");
-                }
-                return sb.ToString();
-            }
-            public int GetCVTNumbCols()
-            {
-                return actualConcurrentDictionatry.Count + 1;
-            }
-            public string GetCVTFileString()
-            {
-                StringBuilder sb = new StringBuilder(DateTime.Now.ToString(TimeFormat.standardDateTimeFormatWithMs) + "\t");
-                foreach (KeyValuePair<string, string> KeyVerdi in actualConcurrentDictionatry)
-                {
-                    sb.Append(KeyVerdi.Value + "\t");
-                }
-                return sb.ToString();
-            }
-            public string GetValuePairList()
-            {
-                StringBuilder sb = new StringBuilder("");
-                foreach (KeyValuePair<string, string> KeyVerdi in actualConcurrentDictionatry)
-                {
-                    sb.AppendLine(KeyVerdi.Key + ": " + KeyVerdi.Value);
-                    // do something with entry.Value or entry.Key
-                }
-                return sb.ToString();
+                timestamp = timestamp ?? DateTime.Now;
+                this.timestamp = timestamp.Value;
+                this.trafficType = trafficType;
+                this.rawData = rawData;
+                this.sourceInterface = sourceInterface;
+                this.direction = direction;
+                this.decodeMessage = decodeMessage;
+                this.additionalInformation = additionalInfo;
             }
         }
 
-        static public class LogVal
+        static private void InitTraficLogger()
         {
-            static private void init()
-            {
-                // Starting the debug profiling log thread.
-                Thread profileThread = new Thread(new ThreadStart(DebugThreadProfileLog));
-                profileThread.IsBackground = true;
-                profileThread.Start();
-            }
-            // Private methods. Threads.
-            static private void DebugThreadProfileLog()
-            {
-                if (debugLevel == Level.Dev)
-                {
-                    while (true)
-                    {
-                        PerpetualCVTLogFile profileFile = new PerpetualCVTLogFile(PostScript: "Debug Log Value", filType: FileType.Debug);
-                        while (true)
-                        {
-                            profileFile.AddMessage(profilingValues);
-                            Thread.Sleep(profilingStorageTimeMs);
-                        }
+            Thread trafficThread = new Thread(new ThreadStart(TrafficMsgLogThread));
+            trafficThread.Start();
+            trafficThread.IsBackground = true;
+        }
 
-                    }
-                }
-            }
-            static public void Add<TValue>(string Name, TValue Verdi) //where TValue : string, float, bool, int?
+        /// <summary>
+        /// Add a messate to the log. For best use, a function should be created for TrafficMsgDecoder delegate to decode the message.
+        /// </summary>
+        /// <example>
+        /// public static void TestMsgDecoder(byte[] rawData, Debug.LogTraffic.Direction direction, out Debug.LogTraffic.Validity valid, out string sourceAdr, out string targetAdr, out string command, out string detail, out string checkSum)
+        /// {
+        ///     targetAdr = "0x" + rawData[0].ToString("X2");
+        ///     sourceAdr = "0x" + rawData[1].ToString("X2");
+        ///     command = "0x" + rawData[2].ToString("X2") + "Test Command";
+        ///     checkSum = "0x" + rawData[7].ToString("X2") + rawData[8].ToString("X2");
+        ///     detail = "0x" + rawData[3].ToString("X2") + rawData[4].ToString("X2") + rawData[5].ToString("X2") + rawData[6].ToString("X2");
+        ///     valid = Debug.LogTraffic.Validity.Valid;
+        /// }
+        /// Debug.LogTraffic.TrafficMsgDecoder testDekoder = TestMsgDecoder;
+        /// Debug.LogTraffic.Add("Test", rawData, testDekoder, "Main RS485", Debug.LogTraffic.Direction.In);
+        /// </example>
+
+        static public void AddTrafficMessage(string trafficType, byte[] rawData, TrafficMsgDecoder decodeMessage = null, string sourceInterface = "", TrafficDirection direction = TrafficDirection.Unknown,
+                DateTime? timestamp = null, string additionalInfo = "")
+        {
+            if (DebugLevel == Level.Dev)
             {
-                //profilingValues[Name] = Verdi.ToString();
-                profilingValues.Add(Name, Verdi);
+                timestamp = timestamp ?? DateTime.Now;
+
+                Debug.TrafficMessageQueueForSaving.Enqueue(new TrafficMessage(trafficType, rawData, timestamp.Value, sourceInterface,
+                    direction, decodeMessage, additionalInfo));
             }
         }
 
-        static public void AddHandledExeptionB(this Exception errorKode, string name = "", string details = "", Level level = Level.Detail,
-        [System.Runtime.CompilerServices.CallerMemberName] string memberName = "",
-        [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "",
-        [System.Runtime.CompilerServices.CallerLineNumber] int sourceLineNumber = 0)
+        static private void TrafficMsgLogThread()
         {
-            if (name == "")
-                name = errorKode.Message;
-            LogMsg.AddMessageCore(MessageType.HandledException, name, errorKode.Message + "/n/r" + errorKode.ToString() + "/n/r" + details, level,
-                memberName, sourceFilePath, sourceLineNumber);
-        }
-        static public class LogMsg
-        {
-            static private void init()
+            while (true)
             {
-                // Starting the debug log thread.
-                Thread debugThread = new Thread(new ThreadStart(DebugThreadMsgLog));
-                debugThread.IsBackground = true;
-                debugThread.Start();
-            }
-            static public void AddHandledExeption(string Name, Exception errorKode, string details = "", Level level = Level.Detail,
-            [System.Runtime.CompilerServices.CallerMemberName] string memberName = "",
-            [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "",
-            [System.Runtime.CompilerServices.CallerLineNumber] int sourceLineNumber = 0)
-            {
-                AddMessageCore(MessageType.HandledException, Name, errorKode.Message + "/n/r" + errorKode.ToString() + "/n/r" + details, level,
-                    memberName, sourceFilePath, sourceLineNumber);
-            }
-
-            static public void AddAppEvent(string message, string details, Level level = Level.Dev,
-            [System.Runtime.CompilerServices.CallerMemberName] string memberName = "",
-            [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "",
-            [System.Runtime.CompilerServices.CallerLineNumber] int sourceLineNumber = 0)
-            {
-                AddMessageCore(MessageType.AppEvent, message, details, level, memberName, sourceFilePath, sourceLineNumber);
-            }
-            static public void AddUserAction(string message, string details, Level level = Level.Dev,
-            [System.Runtime.CompilerServices.CallerMemberName] string memberName = "",
-            [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "",
-            [System.Runtime.CompilerServices.CallerLineNumber] int sourceLineNumber = 0)
-            {
-                AddMessageCore(MessageType.UserAction, message, details, level, memberName, sourceFilePath, sourceLineNumber);
-            }
-            static public void AddFatalUnhandledExeption(Exception errorKode)
-            {
-                /*StringBuilder profilesSB = new StringBuilder("");
-                foreach (KeyValuePair<string, string> KeyVerdi in profilingValues)
+                if (DebugLevel == Level.Dev)
                 {
-                    profilesSB.AppendLine(KeyVerdi.Key + ": " + KeyVerdi.Value);
-                    // do something with entry.Value or entry.Key
-                }*/
-                StringBuilder profilesSB = new StringBuilder(profilingValues.GetValuePairList());
-                AddMessageCore(MessageType.FatalUnHandledExeption, errorKode.Message, errorKode.ToString()
-                    , Level.Major, "", "", 0);
-                AddAppEvent("Application Exit with error", errorKode.Message + "\r\nCurrent gathered value log values:\r\n" + profilesSB.ToString(), Level.Major);
-
-                Directory.CreateDirectory(FileEnviroment.ProducedFilesPath);
-                using (StreamWriter crashReportFile = new StreamWriter(FileEnviroment.ProducedFilesPath + FileEnviroment.GetFileName(PostScript: "Crash report", Extention: "txt")))
-                {
-                    crashReportFile.WriteLine("Application terminated with unhandled execption");
-                    crashReportFile.WriteLine(ExtensionsAssembly.GetFullID());
-                    crashReportFile.WriteLine("");
-                    crashReportFile.Write("Error message:" + errorKode.Message);
-                    crashReportFile.WriteLine("");
-                    crashReportFile.Write(errorKode.ToString());
-                    crashReportFile.WriteLine("");
-                    crashReportFile.WriteLine(" ");
-                    crashReportFile.WriteLine("System information gathered at start:");
-                    crashReportFile.WriteLine(Debug.SystemInfo.Get());
-                    crashReportFile.WriteLine("Current gathered value log values:");
-                    crashReportFile.WriteLine(profilingValues.GetValuePairList());
-                    crashReportFile.WriteLine("Application configuration:");
-                    crashReportFile.WriteLine(optionSystem.GetAllSettingsForReporting());
-                }
-            }
-            static private void DebugThreadMsgLog()
-            {
-                //DebugMessageCollected outResult;
-                PerpetualCVTLogFile debugFile = new PerpetualCVTLogFile(PostScript: "Debug Log Message", filType: FileType.Debug);
-                while (true)
-                {
-                    int numbMsgInQue = Debug.DebugMessageQueueForSaving.Count;
+                    int numbMsgInQue = Debug.TrafficMessageQueueForSaving.Count;
                     if (numbMsgInQue >= messageOverflowLimit)
                     {
-                        //Empty the Q if completly full. Add error.
-                        Debug.DebugMessageQueueForSaving.Clear();
-                        //TOTO: Replace with error
-                        Debug.LogMsg.AddAppEvent("Debug Message Queue overflow.", "Limit: " +
+                        Debug.TrafficMessageQueueForSaving.Clear();
+                        Debug.AddAppEvent("Traffic Queue overflow.", "Limit: " +
                             messageOverflowLimit.ToString() + ". Items found and removed: " + numbMsgInQue.ToString(), Level.Major);
-                        numbMsgInQue = Debug.DebugMessageQueueForSaving.Count;
+                        numbMsgInQue = Debug.TrafficMessageQueueForSaving.Count;
                     }
-                    if (numbMsgInQue > 0)
+                    if (NewTrafficMessage != null)
                     {
-                        for (int i = 0; i < numbMsgInQue; i++)
-                        {
-                            debugFile.AddMessage(DebugMessageQueueForSaving.Dequeue());
-                        }
-                        // TODO Figure out how to add the whole array at a time, sithout error.
-                        // TODO Figure out passing a Queue ref
-                    }
-                    Thread.Sleep(messageLogBreakTimeMs); //
-                }
-            }
-            // private methods.
-            static public void AddMessageCore(MessageType type, string message, string details, Level level,
-                string memberName, string sourceFilePath, int sourceLineNumber)
-            {
-                // Only put in Q if level higher or equal to teh system debug level.
-                if (level >= debugLevel)
-                {
-                    Debug.DebugMessageQueueForSaving.Enqueue(new DebugMessageCollected(type, level, DateTime.Now, message, details,
-                        Path.GetFileName(sourceFilePath), sourceLineNumber, memberName));
-                }
-            }
-        }
-        static public class LogTraffic
-        {
-            private static readonly Queue<TrafficMsgCollected> TrafficMessageQueueForSaving = new Queue<TrafficMsgCollected>();
-
-            static private void init()
-            {
-                // Starting the traffic message log thread.
-                Thread trafficThread = new Thread(new ThreadStart(TrafficMsgLogThread));
-                trafficThread.Start();
-                trafficThread.IsBackground = true;
-            }
-            struct TrafficMsgCollected : IcvtStruckt
-            {
-                DateTime timestamp;
-                string trafficType;
-                byte[] rawData;
-                string sourceInterface;
-                LogTraffic.Direction direction;
-                TrafficMsgDecoder decodeMessage;
-
-                public TrafficMsgCollected(string trafficType, byte[] rawData, DateTime timestamp, string sourceInterface = "",
-                    LogTraffic.Direction direction = LogTraffic.Direction.Unknown, TrafficMsgDecoder decodeMessage = null)
-                {
-                    /*
-                    if (timestamp == null)
-                    {
-                        this.timestamp = DateTime.Now;
-                    }
-                    else
-                    {
-                        this.timestamp = (DateTime)timestamp;
-                    }*/
-                    this.timestamp = timestamp;
-                    this.trafficType = trafficType;
-                    this.rawData = rawData;
-                    this.sourceInterface = sourceInterface;
-                    this.direction = direction;
-                    this.decodeMessage = decodeMessage;
-                }
-                public string GetCVTFileHeader()
-                {
-                    return "Time\tType\tInterface\tDirection\tRaw\tValidity\tSource\tTarget\tCommand\tDetails";
-                }
-                public int GetCVTNumbCols()
-                {
-                    return 10;
-                }
-                public string GetCVTFileString()
-                {
-
-                    string sourceAdr = "";
-                    string targetAdr = "";
-                    string command = "";
-                    string detail = "";
-                    string checkSum = "";
-                    LogTraffic.Validity valid = LogTraffic.Validity.Unknown;
-                    StringBuilder arraStr = new StringBuilder(this.timestamp.ToString(TimeFormat.standardDateTimeFormatWithMs) + "\t");
-                    arraStr.Append(this.sourceInterface + "\t");
-                    arraStr.Append(this.direction.ToString() + "\t");
-                    foreach (var item in this.rawData)
-                    {
-                        arraStr.Append(item.ToString("X2") + " ");
-                    }
-                    if (this.decodeMessage != null)
-                    {
-                        this.decodeMessage(rawData, direction, out valid, out sourceAdr, out targetAdr, out command, out detail, out checkSum);
-                    }
-                    arraStr.Append(valid.ToString() + "\t");
-                    arraStr.Append(sourceAdr + "\t");
-                    arraStr.Append(targetAdr + "\t");
-                    arraStr.Append(command + "\t");
-                    arraStr.Append(detail + "\t");
-                    arraStr.Append(checkSum + "\t");
-
-                    return arraStr.ToString();
-                }
-            }
-            public enum Validity { Unknown, Invalid, Valid }
-            public enum Direction { In, Out, Up, Down, A, B, Unknown };  //Direction should be an enum, as decoder might need the information
-
-            public delegate void TrafficMsgDecoder(byte[] rawData, Debug.LogTraffic.Direction direction, out Debug.LogTraffic.Validity valid, out string sourceAdr,
-                out string targetAdr, out string command, out string detail, out string checkSum);
-
-            static public void Add(string trafficType, byte[] rawData, TrafficMsgDecoder decodeMessage = null, string sourceInterface = "", Debug.LogTraffic.Direction direction = Debug.LogTraffic.Direction.Unknown,
-                  DateTime? timestamp = null)
-            {
-                DateTime lokaltimestamp;
-                if (debugLevel == Level.Dev)
-                {
-                    if (timestamp == null)
-                    {
-                        lokaltimestamp = DateTime.Now;
-                    }
-                    else
-                    {
-                        lokaltimestamp = (DateTime)timestamp;
-                    }
-                    Debug.LogTraffic.TrafficMessageQueueForSaving.Enqueue(new TrafficMsgCollected(trafficType, rawData, lokaltimestamp, sourceInterface,
-                        direction, decodeMessage));
-                }
-            }
-            static private void TrafficMsgLogThread()
-            {
-                if (debugLevel == Level.Dev)
-                {
-                    PerpetualCVTLogFile trafficFile = new PerpetualCVTLogFile(PostScript: "Debug Log Traffic", filType: FileType.Debug);
-                    while (true)
-                    {
-                        int numbMsgInQue = Debug.LogTraffic.TrafficMessageQueueForSaving.Count;
-                        if (numbMsgInQue >= messageOverflowLimit)
-                        {
-                            //Empty the Q if completly full. Add error.
-                            Debug.LogTraffic.TrafficMessageQueueForSaving.Clear();
-                            Debug.LogMsg.AddAppEvent("Traffic Queue overflow.", "Limit: " +
-                                messageOverflowLimit.ToString() + ". Items found and removed: " + numbMsgInQue.ToString(), Level.Major);
-                            numbMsgInQue = Debug.LogTraffic.TrafficMessageQueueForSaving.Count;
-                        }
                         if (numbMsgInQue > 0)
                         {
                             for (int i = 0; i < numbMsgInQue; i++)
                             {
-                                trafficFile.AddMessage(TrafficMessageQueueForSaving.Dequeue());
+                                NewTrafficMessage(null, TrafficMessageQueueForSaving.Dequeue());
                             }
                         }
-                        Thread.Sleep(trafficLogBreakTimeMs); //
                     }
+                    Thread.Sleep(trafficLogBreakTimeMs);
                 }
+                else
+                    Thread.Sleep(trafficLogBreakTimeMs*10); 
             }
-            /* Custom decode function excample
-            //Make the function:
-            public static void TestMsgDecoder(byte[] rawData, Debug.LogTraffic.Direction direction, out Debug.LogTraffic.Validity valid, out string sourceAdr, out string targetAdr, out string command, out string detail, out string checkSum)
-            {
-                targetAdr = "0x" + rawData[0].ToString("X2");
-                sourceAdr = "0x" + rawData[1].ToString("X2");
-                command = "0x" + rawData[2].ToString("X2") + "Test Command";
-                checkSum = "0x" + rawData[7].ToString("X2") + rawData[8].ToString("X2");
-                detail = "0x" + rawData[3].ToString("X2") + rawData[4].ToString("X2") + rawData[5].ToString("X2") + rawData[6].ToString("X2");
-                valid = Debug.LogTraffic.Validity.Valid;
-            }
-            //Assigne to typed variable
-            Debug.LogTraffic.TrafficMsgDecoder testDekoder = TestMsgDecoder;
-            //Use
-            Debug.LogTraffic.Add("Test", rawData, testDekoder, "Main RS485", Debug.LogTraffic.Direction.In);
-            */
         }
-        static public class SystemInfo
+        #endregion
+
+        #region Systeminfo
+        public delegate void SystemInfoIsRetreivedHandler(object sender, EventArgs e);
+        public static event SystemInfoIsRetreivedHandler SystemInfoIsRetreived;
+        public static bool SystemInfoRetreived { get; private set; } = false;
+        private static string systemInformation;
+
+        static public string GetSystemInfo()   // the Name property
         {
-            //Sys info
-            public delegate void SystemInfoIsRetreivedHandler(object sender, EventArgs e);
-            private static Boolean isRetrived = false;
-            private static string systemInformation = "System information not retreived. Application not running for long enough.";
-            public static event SystemInfoIsRetreivedHandler SystemInfoIsRetreived;
-            static public Boolean GetIsRetreived()
+            return systemInformation;
+        }
+
+        static private void InitSystemInfoCollector()
+        {
+            if (gatherSystemInfo)
             {
-                return isRetrived;
-            }
-            static public string Get()   // the Name property
-            {
-                return systemInformation;
-            }
-            static private void init()
-            {
-                // Starting the retreive system info thread.
+                systemInformation = "System information not retrieved.";
                 Thread systemInfoThread = new Thread(new ThreadStart(SystemInfoRetreivalThread));
                 systemInfoThread.IsBackground = true;//true;
                 systemInfoThread.Start();
             }
-            static private void SystemInfoRetreivalThread()
-            {
-                systemInformation = RetreiveSystemInformation();
-                Debug.LogMsg.AddAppEvent("System Information Gathered", systemInformation, Level.Normal);
-                isRetrived = true;
-                if (SystemInfo.SystemInfoIsRetreived != null)
-                    SystemInfo.SystemInfoIsRetreived(null, EventArgs.Empty);
-            }
-            static private string RetreiveSystemInformation()
-            {
-                try
-                {
-                    //#TODO: Error catch. Do not wan tthis to be able to block a program. If error, just replca text withe error getting system info
-                    StringBuilder sb = new StringBuilder();
-                    string[] Win32_OS_strings = {"Caption", "OSArchitecture", "CSDVersion", "BuildNumber", "CountryCode",
-                                                "FreePhysicalMemory", "FreeSpaceInPagingFiles", "FreeVirtualMemory",
-                                                "InstallDate", "LastBootUpTime", "NumberOfProcesses", "OperatingSystemSKU",
-                                                "OSLanguage","RegisteredUser", "SystemDirectory", "TotalVirtualMemorySize",
-                                                "TotalVisibleMemorySize", "WindowsDirectory"};
-                    string[] Win32_ComputerSystem_strings = {"Caption", "EnableDaylightSavingsTime", "Manufacturer", "Model",
-                                                            "Name", "NumberOfLogicalProcessors", "NumberOfProcessors",
-                                                            "PCSystemType", "Status", "SystemType", "ThermalState",
-                                                            "TotalPhysicalMemory", "UserName", "Domain"};
-                    string[] Win32_Processor_string = {"Caption", "Description", "AddressWidth", "Architecture", "DeviceID", "Family",
-                                                      "MaxClockSpeed", "CurrentClockSpeed", "Name", "NumberOfCores", "Revision",
-                                                      "L2CacheSize", "L2CacheSpeed", "NumberOfLogicalProcessors"};
-                    string[] Win32_System_Enclosure = { "PartNumber", "SerialNumber", "SMBIOSAssetTag" };
-                    string[] Win32_Network_Adapters = { "Caption", "Description", "MACAddress" };
-                    string[] Win32_Network_Adapters_Sub = { "IPAddress", "DefaultIPGateway", "IPSubnet" };
-                    string[] Win32_PnP_With_Problem = { "Caption", "Description", "ConfigManagerErrorCode", "ClassGuid", "DeviceID", "Manufacturer",
-                                                      "Name", "PNPDeviceID", "Service"};
-                    string[] Win32_Disk = { "MediaType", "Model", "SerialNumber", "InterfaceType", "Size", "Partitions",
-                                          "Signature", "FirmwareRevision"};
-                    sb.AppendLine("AP App: " + ExtensionsAssembly.GetFullID());
-                    sb.AppendLine("AP App location: " + ExtensionsAssembly.GetPath());
-                    ManagementObjectSearcher managementObjSearch = new ManagementObjectSearcher("select * from Win32_OperatingSystem");
-                    int i = 0;
-                    foreach (ManagementObject managementObject in managementObjSearch.Get())
-                    {
+            else
+                systemInformation = "System information not retrieved. Application not running for long enough.";
+        }
 
-                        foreach (string name in Win32_OS_strings)
+        static private void SystemInfoRetreivalThread()
+        {
+            systemInformation = RetreiveSystemInformation();
+            Debug.AddAppEvent("System Information Gathered", systemInformation, Level.Dev);
+            SystemInfoRetreived = true;
+            if (SystemInfoIsRetreived != null)
+                SystemInfoIsRetreived(null, EventArgs.Empty);
+        }
+
+        static private string RetreiveSystemInformation()
+        {
+            try
+            {
+                StringBuilder sb = new StringBuilder();
+                string[] Win32_OS_strings = {"Caption", "OSArchitecture", "CSDVersion", "BuildNumber", "CountryCode",
+                                            "FreePhysicalMemory", "FreeSpaceInPagingFiles", "FreeVirtualMemory",
+                                            "InstallDate", "LastBootUpTime", "NumberOfProcesses", "OperatingSystemSKU",
+                                            "OSLanguage","RegisteredUser", "SystemDirectory", "TotalVirtualMemorySize",
+                                            "TotalVisibleMemorySize", "WindowsDirectory"};
+                string[] Win32_ComputerSystem_strings = {"Caption", "EnableDaylightSavingsTime", "Manufacturer", "Model",
+                                                        "Name", "NumberOfLogicalProcessors", "NumberOfProcessors",
+                                                        "PCSystemType", "Status", "SystemType", "ThermalState",
+                                                        "TotalPhysicalMemory", "UserName", "Domain"};
+                string[] Win32_Processor_string = {"Caption", "Description", "AddressWidth", "Architecture", "DeviceID", "Family",
+                                                    "MaxClockSpeed", "CurrentClockSpeed", "Name", "NumberOfCores", "Revision",
+                                                    "L2CacheSize", "L2CacheSpeed", "NumberOfLogicalProcessors"};
+                string[] Win32_System_Enclosure = { "PartNumber", "SerialNumber", "SMBIOSAssetTag" };
+                string[] Win32_Network_Adapters = { "Caption", "Description", "MACAddress" };
+                string[] Win32_Network_Adapters_Sub = { "IPAddress", "DefaultIPGateway", "IPSubnet" };
+                string[] Win32_PnP_With_Problem = { "Caption", "Description", "ConfigManagerErrorCode", "ClassGuid", "DeviceID", "Manufacturer",
+                                                    "Name", "PNPDeviceID", "Service"};
+                string[] Win32_Disk = { "MediaType", "Model", "SerialNumber", "InterfaceType", "Size", "Partitions",
+                                        "Signature", "FirmwareRevision"};
+                sb.AppendLine("AP App: " + App.GetEntryAssembly().GetFullID());
+                sb.AppendLine("AP App location: " + App.GetEntryAssembly().GetPath());
+                ManagementObjectSearcher managementObjSearch = new ManagementObjectSearcher("select * from Win32_OperatingSystem");
+                int i = 0;
+                foreach (ManagementObject managementObject in managementObjSearch.Get())
+                {
+
+                    foreach (string name in Win32_OS_strings)
+                    {
+                        if (managementObject[name] != null)
+                        {
+                            sb.AppendLine("OS " + i + "  " + name + " : " + managementObject[name].ToString());
+                        }
+                    }
+                    i++;
+                }
+                managementObjSearch = new ManagementObjectSearcher("select * from Win32_ComputerSystem");
+                i = 0;
+                foreach (ManagementObject managementObject in managementObjSearch.Get())
+                {
+                    foreach (string name in Win32_ComputerSystem_strings)
+                    {
+                        if (managementObject[name] != null)
+                        {
+                            sb.AppendLine("CS " + i + "  " + name + " : " + managementObject[name].ToString());
+                        }
+                    }
+                    i++;
+                }
+                managementObjSearch = new ManagementObjectSearcher("select * from Win32_Processor");
+                i = 0;
+                foreach (ManagementObject managementObject in managementObjSearch.Get())
+                {
+                    foreach (string name in Win32_Processor_string)
+                    {
+                        if (managementObject[name] != null)
+                        {
+                            sb.AppendLine("Pr " + i + "  " + name + " : " + managementObject[name].ToString());
+                        }
+                    }
+                    i++;
+                }
+                managementObjSearch = new ManagementObjectSearcher("select * from Win32_SystemEnclosure");
+                i = 0;
+                foreach (ManagementObject managementObject in managementObjSearch.Get())
+                {
+                    foreach (string name in Win32_System_Enclosure)
+                    {
+                        if (managementObject[name] != null)
+                        {
+                            sb.AppendLine("Se " + i + "  " + name + " : " + managementObject[name].ToString());
+                        }
+                    }
+                    i++;
+                }
+                managementObjSearch = new ManagementObjectSearcher("select * from Win32_NetworkAdapterConfiguration");
+                i = 0;
+                foreach (ManagementObject managementObject in managementObjSearch.Get())
+                {
+                    if (managementObject["MACAddress"] != null)
+                    {
+                        foreach (string name in Win32_Network_Adapters)
                         {
                             if (managementObject[name] != null)
                             {
-                                sb.AppendLine("OS " + i + "  " + name + " : " + managementObject[name].ToString());
+                                sb.AppendLine("Na " + i + "  " + name + " : " + managementObject[name].ToString());
                             }
                         }
-                        i++;
-                    }
-                    managementObjSearch = new ManagementObjectSearcher("select * from Win32_ComputerSystem");
-                    i = 0;
-                    foreach (ManagementObject managementObject in managementObjSearch.Get())
-                    {
-                        foreach (string name in Win32_ComputerSystem_strings)
+                        if (managementObject["IPAddress"] != null)
                         {
-                            if (managementObject[name] != null)
+                            for (int y = (managementObject["IPAddress"] as string[]).GetLowerBound(0); y < (managementObject["IPAddress"] as string[]).GetUpperBound(0); y++)
                             {
-                                sb.AppendLine("CS " + i + "  " + name + " : " + managementObject[name].ToString());
-                            }
-                        }
-                        i++;
-                    }
-                    managementObjSearch = new ManagementObjectSearcher("select * from Win32_Processor");
-                    i = 0;
-                    foreach (ManagementObject managementObject in managementObjSearch.Get())
-                    {
-                        foreach (string name in Win32_Processor_string)
-                        {
-                            if (managementObject[name] != null)
-                            {
-                                sb.AppendLine("Pr " + i + "  " + name + " : " + managementObject[name].ToString());
-                            }
-                        }
-                        i++;
-                    }
-                    managementObjSearch = new ManagementObjectSearcher("select * from Win32_SystemEnclosure");
-                    i = 0;
-                    foreach (ManagementObject managementObject in managementObjSearch.Get())
-                    {
-                        foreach (string name in Win32_System_Enclosure)
-                        {
-                            if (managementObject[name] != null)
-                            {
-                                sb.AppendLine("Se " + i + "  " + name + " : " + managementObject[name].ToString());
-                            }
-                        }
-                        i++;
-                    }
-                    managementObjSearch = new ManagementObjectSearcher("select * from Win32_NetworkAdapterConfiguration");
-                    i = 0;
-                    foreach (ManagementObject managementObject in managementObjSearch.Get())
-                    {
-                        if (managementObject["MACAddress"] != null)
-                        {
-                            foreach (string name in Win32_Network_Adapters)
-                            {
-                                if (managementObject[name] != null)
+                                foreach (string name in Win32_Network_Adapters_Sub)
                                 {
-                                    sb.AppendLine("Na " + i + "  " + name + " : " + managementObject[name].ToString());
-                                }
-                            }
-                            if (managementObject["IPAddress"] != null)
-                            {
-                                for (int y = (managementObject["IPAddress"] as string[]).GetLowerBound(0); y < (managementObject["IPAddress"] as string[]).GetUpperBound(0); y++)
-                                {
-                                    foreach (string name in Win32_Network_Adapters_Sub)
+                                    if (managementObject[name] != null)
                                     {
-                                        if (managementObject[name] != null)
+                                        if ((managementObject[name] as string[])[y] != null)
                                         {
-                                            if ((managementObject[name] as string[])[y] != null)
-                                            {
-                                                sb.AppendLine("Na " + i + "" + y + " " + name + " : " + (managementObject[name] as string[])[y].ToString());
-                                            }
+                                            sb.AppendLine("Na " + i + "" + y + " " + name + " : " + (managementObject[name] as string[])[y].ToString());
                                         }
                                     }
                                 }
                             }
                         }
-                        i++;
                     }
-                    managementObjSearch = new ManagementObjectSearcher("select * from Win32_PnPEntity WHERE ConfigManagerErrorCode <> 0");
-                    i = 0;
-                    foreach (ManagementObject managementObject in managementObjSearch.Get())
-                    {
-                        foreach (string name in Win32_PnP_With_Problem)
-                        {
-                            if (managementObject[name] != null)
-                            {
-                                sb.AppendLine("PN " + i + "  " + name + " : " + managementObject[name].ToString());
-                            }
-                        }
-                        i++;
-                    }
-                    managementObjSearch = new ManagementObjectSearcher("select * from Win32_DiskDrive");
-                    i = 0;
-                    foreach (ManagementObject managementObject in managementObjSearch.Get())
-                    {
-                        foreach (string name in Win32_Disk)
-                        {
-                            if (managementObject[name] != null)
-                            {
-                                sb.AppendLine("HD " + i + "  " + name + " : " + managementObject[name].ToString());
-                            }
-                        }
-                        i++;
-                    }
-                    return sb.ToString();
+                    i++;
                 }
-                catch (Exception e)
+                managementObjSearch = new ManagementObjectSearcher("select * from Win32_PnPEntity WHERE ConfigManagerErrorCode <> 0");
+                i = 0;
+                foreach (ManagementObject managementObject in managementObjSearch.Get())
                 {
-                    Debug.LogMsg.AddHandledExeption("System information not retreived. Failure during retreival", e);
-                    return ("System information not retreived. Failure during retreival. Error: " + e.Message);
+                    foreach (string name in Win32_PnP_With_Problem)
+                    {
+                        if (managementObject[name] != null)
+                        {
+                            sb.AppendLine("PN " + i + "  " + name + " : " + managementObject[name].ToString());
+                        }
+                    }
+                    i++;
                 }
+                managementObjSearch = new ManagementObjectSearcher("select * from Win32_DiskDrive");
+                i = 0;
+                foreach (ManagementObject managementObject in managementObjSearch.Get())
+                {
+                    foreach (string name in Win32_Disk)
+                    {
+                        if (managementObject[name] != null)
+                        {
+                            sb.AppendLine("HD " + i + "  " + name + " : " + managementObject[name].ToString());
+                        }
+                    }
+                    i++;
+                }
+                return sb.ToString();
+            }
+            catch (Exception e)
+            {
+                Debug.AddHandledExeption(e, "System information not retrieved. Failure during retrieval");
+                return ("System information not retrieved. Failure during retrieval. Error: " + e.Message);
             }
         }
-        #region "System hooks"
+        #endregion
+
+        #region system hooks
         static void UnhandledExceptionHandler(object sender, UnhandledExceptionEventArgs args)
         {
             Exception e = (Exception)args.ExceptionObject;
-            Debug.LogMsg.AddFatalUnhandledExeption(e);
+            Debug.AddFatalUnhandledExeption(e);
             // Allow time to write
             Thread.Sleep(2);
-            // #TODO Gracefull exit. Connect to debug thread, make sure message is written to file
+
             Process.GetCurrentProcess().Kill();
         }
         #endregion

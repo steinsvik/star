@@ -8,14 +8,12 @@ using System.IO;
 using System.Reflection;
 using System.Threading;
 using System.Globalization;
+using System.Linq.Expressions;
 using System.Drawing;
+using Steinsvik.Star;
 
-
-namespace Ebs.Star.Core
+namespace Steinsvik.Star
 {
-    using StarApp = Ebs.Star.Core.App;
-    using StarTime = Ebs.Star.Core.Time;
-
     public static class Time
     {
         public static string compactTimeFormat { get; set; } = "HHmmss";
@@ -109,7 +107,7 @@ namespace Ebs.Star.Core
             get { return GetEntryAssembly(); }
         }
 
-        public static string DefaultAppDataPath(DefaultAppPathType type = DefaultAppPathType.Common, string subFolder = "")
+        public static string DefaultAppDataPath(DefaultAppPathType type = App.DefaultAppPathType.Common, string subFolder = "")
         {
             string comp = (App.GetEntryAssembly().GetCompany() == "") ? "NSE" : App.GetEntryAssembly().GetCompany();
             string appName = (App.GetEntryAssembly().GetApplicationName() == "") ? "NSE test app" : App.GetEntryAssembly().GetApplicationName();
@@ -131,6 +129,27 @@ namespace Ebs.Star.Core
                     break;
             }
             return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) + @"\", comp + @"\" + appName + @"\" + sub);
+        }
+
+        public enum DefaultAppPathType
+        {
+            Common,
+            User,
+            RoamingUser
+        }
+    }
+
+    public static class Util
+    {
+        /// <summary> Get name of a member. </summary>
+        /// <excample> string nameOfParam1 = Util.GetMemberName(() => param1); </excample>
+        /// <remarks>
+        /// Source: http://stackoverflow.com/questions/9801624/get-name-of-a-variable-or-parameter 
+        /// </remarks>
+        public static string GetMemberName<T>(Expression<Func<T>> memberExpression)
+        {
+            MemberExpression expressionBody = (MemberExpression)memberExpression.Body;
+            return expressionBody.Member.Name;
         }
     }
 
@@ -515,12 +534,5 @@ namespace Ebs.Star.Core
         {
             return Path.GetPathRoot(refIn.Location).Remove(1);
         }
-    }
-
-    public enum DefaultAppPathType
-    {
-        Common,
-        User,
-        RoamingUser
     }
 }
