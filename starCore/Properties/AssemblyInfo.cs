@@ -6,9 +6,9 @@ using System.Runtime.InteropServices;
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
 [assembly: AssemblyTitle("starCore")]
-[assembly: AssemblyDescription("Part of star tools and Resources. Basic utilities")]
+[assembly: AssemblyDescription("Part of Steinsvik Tools and Resources. Basic utilities.")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("")]
+[assembly: AssemblyCompany("Steinsvik")]
 [assembly: AssemblyProduct("starCore")]
 [assembly: AssemblyCopyright("Copyright ©  2015")]
 [assembly: AssemblyTrademark("")]
