@@ -22,6 +22,8 @@ namespace Steinsvik.Star
         public enum Level { Dev, Detail, Normal, Major };
         public enum MessageType { FatalUnHandledExeption, HandledException, Warning, AppEvent, UserAction };
 
+        private static bool debugEngineMessageActive = false;
+        private static bool debugEngineTrafficActive = false;
         private const int messageOverflowLimit = 1000;
         private const int profilingStorageTimeMs = 1000;
         private const int messageLogBreakTimeMs = 10;
@@ -39,6 +41,9 @@ namespace Steinsvik.Star
             // Provide an unhandled exception hook;
             AppDomain currentDomain = AppDomain.CurrentDomain;
             currentDomain.UnhandledException += new UnhandledExceptionEventHandler(UnhandledExceptionHandler);
+
+            debugEngineMessageActive = true;
+            debugEngineTrafficActive = true;
 
             Debug.AddAppEvent("Application Started", ExtensionsAssembly.GetFullID(Assembly.GetEntryAssembly()), Level.Major);
             Debug.AddAppEvent("Application Started.Details", App.GetAllAssembliesStringArray(false, true, false).ToDelimetedString("//"), Level.Dev);
@@ -100,6 +105,30 @@ namespace Steinsvik.Star
         // Going with regular Q, event though is not thread safe. I have only  one exit. Figure it will be safe...
         private static readonly Queue<DebugMessage> DebugMessageQueueForPassingToEvent = new Queue<DebugMessage>();
 
+        public struct DebugMessage
+        {
+            MessageType MessageType;
+            Level MessageLevel;
+            DateTime Timestamp;
+            string Message;
+            string Details;
+            string SourceFile;
+            int SourceLine;
+            string SourceMemberName;
+            public DebugMessage(MessageType type, Level level, DateTime timestamp, string message, string details,
+                    string filePath, int sourceLineNumber, string memberName)
+            {
+                this.MessageType = type;
+                this.MessageLevel = level;
+                this.Timestamp = timestamp;
+                this.Message = message;
+                this.Details = details;
+                this.SourceFile = filePath;
+                this.SourceLine = sourceLineNumber;
+                this.SourceMemberName = memberName;
+            }
+        }
+
         static private void InitMessageHandling()
         {
             // Starting the debug log thread.
@@ -119,7 +148,15 @@ namespace Steinsvik.Star
                 memberName, sourceFilePath, sourceLineNumber);
         }
 
-        static public void AddAppEvent(string message, string details, Level level = Level.Dev,
+        static public void AddHandledExeption(this string name, string details = "", Level level = Level.Dev,
+        [System.Runtime.CompilerServices.CallerMemberName] string memberName = "",
+        [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "",
+        [System.Runtime.CompilerServices.CallerLineNumber] int sourceLineNumber = 0)
+        {
+            AddMessageCore(MessageType.HandledException, name, details, level,
+                memberName, sourceFilePath, sourceLineNumber);
+        }
+        static public void AddAppEvent(this string message, string details = "", Level level = Level.Dev,
         [System.Runtime.CompilerServices.CallerMemberName] string memberName = "",
         [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "",
         [System.Runtime.CompilerServices.CallerLineNumber] int sourceLineNumber = 0)
@@ -127,7 +164,7 @@ namespace Steinsvik.Star
             AddMessageCore(MessageType.AppEvent, message, details, level, memberName, sourceFilePath, sourceLineNumber);
         }
 
-        static public void AddUserAction(string message, string details, Level level = Level.Dev,
+        static public void AddUserAction(this string message, string details = "", Level level = Level.Dev,
         [System.Runtime.CompilerServices.CallerMemberName] string memberName = "",
         [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "",
         [System.Runtime.CompilerServices.CallerLineNumber] int sourceLineNumber = 0)
@@ -166,34 +203,40 @@ namespace Steinsvik.Star
         {
             // DebugMessageCollected outResult;
             // PerpetualCVTLogFile debugFile = new PerpetualCVTLogFile(PostScript: "Debug Log Message", filType: FileType.Debug);
-            while (true)
-            {
-                int numbMsgInQue = Debug.DebugMessageQueueForPassingToEvent.Count;
-                if (numbMsgInQue >= messageOverflowLimit)
+            try {
+                while (true)
                 {
-                    Debug.DebugMessageQueueForPassingToEvent.Clear();
-                    Debug.AddHandledExeption(new InternalBufferOverflowException(), "Debug message queue overflow.", "Limit: " +
-                            messageOverflowLimit.ToString() + ". Items found and removed: " + numbMsgInQue.ToString(), Level.Major);
-                    numbMsgInQue = Debug.DebugMessageQueueForPassingToEvent.Count;
-                }
-                if (NewDebugMessage != null)
-                {
-                    if (numbMsgInQue > 0)
+                    int numbMsgInQue = Debug.DebugMessageQueueForPassingToEvent.Count;
+                    if (numbMsgInQue >= messageOverflowLimit)
                     {
-                        for (int i = 0; i < numbMsgInQue; i++)
+                        Debug.DebugMessageQueueForPassingToEvent.Clear();
+                        Debug.AddHandledExeption(new InternalBufferOverflowException(), "Debug message queue overflow.", "Limit: " +
+                                messageOverflowLimit.ToString() + ". Items found and removed: " + numbMsgInQue.ToString(), Level.Major);
+                        numbMsgInQue = Debug.DebugMessageQueueForPassingToEvent.Count;
+                    }
+                    if (NewDebugMessage != null)
+                    {
+                        if (numbMsgInQue > 0)
                         {
-                            NewDebugMessage(null, DebugMessageQueueForPassingToEvent.Dequeue());
+                            for (int i = 0; i < numbMsgInQue; i++)
+                            {
+                                NewDebugMessage(null, DebugMessageQueueForPassingToEvent.Dequeue());
+                            }
                         }
                     }
+                    Thread.Sleep(messageLogBreakTimeMs);
                 }
-                Thread.Sleep(messageLogBreakTimeMs); 
+            }
+            catch
+            {
+                debugEngineTrafficActive = false;
             }
         }
 
         static private void AddMessageCore(MessageType type, string message, string details, Level level,
             string memberName, string sourceFilePath, int sourceLineNumber)
         {
-            if (level >= DebugLevel)
+            if ((level >= DebugLevel) & debugEngineMessageActive)
             {
                 Debug.DebugMessageQueueForPassingToEvent.Enqueue(new DebugMessage(type, level, DateTime.Now, message, details,
                     Path.GetFileName(sourceFilePath), sourceLineNumber, memberName));
@@ -209,30 +252,6 @@ namespace Steinsvik.Star
         public static readonly Queue<TrafficMessage> TrafficMessageQueueForSaving = new Queue<TrafficMessage>();
         public delegate void TrafficMsgDecoder(byte[] rawData, TrafficDirection direction, out TrafficValidity valid, out string sourceAdr,
             out string targetAdr, out string command, out string detail, out string checkSum);
-
-        public struct DebugMessage
-        {
-            MessageType MessageType;
-            Level MessageLevel;
-            DateTime Timestamp;
-            string Message;
-            string Details;
-            string SourceFile;
-            int SourceLine;
-            string SourceMemberName;
-            public DebugMessage(MessageType type, Level level, DateTime timestamp, string message, string details,
-                    string filePath, int sourceLineNumber, string memberName)
-            {
-                this.MessageType = type;
-                this.MessageLevel = level;
-                this.Timestamp = timestamp;
-                this.Message = message;
-                this.Details = details;
-                this.SourceFile = filePath;
-                this.SourceLine = sourceLineNumber;
-                this.SourceMemberName = memberName;
-            }
-        }
 
         public struct TrafficMessage 
         {
@@ -281,11 +300,10 @@ namespace Steinsvik.Star
         /// Debug.LogTraffic.TrafficMsgDecoder testDekoder = TestMsgDecoder;
         /// Debug.LogTraffic.Add("Test", rawData, testDekoder, "Main RS485", Debug.LogTraffic.Direction.In);
         /// </example>
-
         static public void AddTrafficMessage(string trafficType, byte[] rawData, TrafficMsgDecoder decodeMessage = null, string sourceInterface = "", TrafficDirection direction = TrafficDirection.Unknown,
                 DateTime? timestamp = null, string additionalInfo = "")
         {
-            if (DebugLevel == Level.Dev)
+            if ((DebugLevel == Level.Dev) & debugEngineTrafficActive) 
             {
                 timestamp = timestamp ?? DateTime.Now;
 
@@ -296,32 +314,39 @@ namespace Steinsvik.Star
 
         static private void TrafficMsgLogThread()
         {
-            while (true)
-            {
-                if (DebugLevel == Level.Dev)
+            try {
+                while (true)
                 {
-                    int numbMsgInQue = Debug.TrafficMessageQueueForSaving.Count;
-                    if (numbMsgInQue >= messageOverflowLimit)
+                    if (DebugLevel == Level.Dev)
                     {
-                        Debug.TrafficMessageQueueForSaving.Clear();
-                        Debug.AddAppEvent("Traffic Queue overflow.", "Limit: " +
-                            messageOverflowLimit.ToString() + ". Items found and removed: " + numbMsgInQue.ToString(), Level.Major);
-                        numbMsgInQue = Debug.TrafficMessageQueueForSaving.Count;
-                    }
-                    if (NewTrafficMessage != null)
-                    {
-                        if (numbMsgInQue > 0)
+                        int numbMsgInQue = Debug.TrafficMessageQueueForSaving.Count;
+                        if (numbMsgInQue >= messageOverflowLimit)
                         {
-                            for (int i = 0; i < numbMsgInQue; i++)
+                            Debug.TrafficMessageQueueForSaving.Clear();
+                            Debug.AddAppEvent("Traffic Queue overflow.", "Limit: " +
+                                messageOverflowLimit.ToString() + ". Items found and removed: " + numbMsgInQue.ToString(), Level.Major);
+                            numbMsgInQue = Debug.TrafficMessageQueueForSaving.Count;
+                        }
+                        if (NewTrafficMessage != null)
+                        {
+                            if (numbMsgInQue > 0)
                             {
-                                NewTrafficMessage(null, TrafficMessageQueueForSaving.Dequeue());
+                                for (int i = 0; i < numbMsgInQue; i++)
+                                {
+                                    NewTrafficMessage(null, TrafficMessageQueueForSaving.Dequeue());
+                                }
                             }
                         }
+                        Thread.Sleep(trafficLogBreakTimeMs);
                     }
-                    Thread.Sleep(trafficLogBreakTimeMs);
+                    else
+                        Thread.Sleep(trafficLogBreakTimeMs * 10);
                 }
-                else
-                    Thread.Sleep(trafficLogBreakTimeMs*10); 
+            }
+            catch (Exception e)
+            {
+                e.AddHandledExeption("Traffic debug handler stopped unexpectedly.", level: Level.Normal);
+                debugEngineTrafficActive = false;
             }
         }
         #endregion
