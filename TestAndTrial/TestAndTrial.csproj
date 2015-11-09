@@ -84,6 +84,10 @@
       <Project>{55a6ef5c-07b4-4e2e-b7b0-a16f99f0947c}</Project>
       <Name>starCore</Name>
     </ProjectReference>
+    <ProjectReference Include="..\starExtended\starExtended.csproj">
+      <Project>{3d6c2364-def5-4255-8694-267f10e399b2}</Project>
+      <Name>starExtended</Name>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
