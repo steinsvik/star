@@ -93,7 +93,6 @@ namespace Steinsvik.Star
 
         public bool WriteString(List<byte> sendBytes, bool clearTxBuffer = true, bool clearRxBuffer = true, int timeoutms = 50)
         {
-            //byte[] byteString = new byte[sendString.Length];
             try
             {
                 serialPort.WriteTimeout = timeoutms;
@@ -102,15 +101,10 @@ namespace Steinsvik.Star
                     serialPort.DiscardOutBuffer();
                 if (clearRxBuffer)
                     serialPort.DiscardInBuffer();
-                //for (int i = 0; i < sendString.Count; i++)
-                //    byteString[i] = Convert.ToByte(sendString[i]);
                 serialPort.Write(sendBytes.ToArray(), 0, sendBytes.Count());
-
-                //serialPort.Write(sendString);
-
             }
             catch
-            {//TODO: Add handled exception handler
+            { 
                 return false;
             }
             return true;
@@ -120,7 +114,7 @@ namespace Steinsvik.Star
         {
             int numbRes;
             DateTime endTime;
-            int actualTimeoutMS = timeoutms; //500;   //TODO:??????????????
+            int actualTimeoutMS = timeoutms;
 
             receiveBytes = new List<byte>();
 
@@ -129,12 +123,10 @@ namespace Steinsvik.Star
             //char[] tempCharData;
             try
             {
-                //Thread.Sleep(50);  //TODO: Find betterway to get all 7 chars! Event og pingpong?
-                serialPort.ReadTimeout = actualTimeoutMS - 20;//timeoutms;
+                serialPort.ReadTimeout = actualTimeoutMS - 20;
                 serialPort.DiscardNull = false;
                 serialPort.ReceivedBytesThreshold = numbBytes;
 
-                //receiveString = "";
                 endTime = DateTime.Now.AddMilliseconds((double)actualTimeoutMS);
 
                 while (DateTime.Now < endTime)
@@ -144,25 +136,22 @@ namespace Steinsvik.Star
                         numbRes = serialPort.Read(tempData, 0, numbBytes);
                         if (numbRes != 0)
                         {
-                            //tempCharData = new char[numbRes];
-                            //for (int i = 0; i < numbRes; i++)
-                            //{
-                            //    tempCharData[i] = Convert.ToChar(tempData[i]);
-                            //}
-                            //receiveString = new string(tempCharData, 0, numbRes);//tempData.ToString();
-                            //receive
                             receiveBytes.AddRange(tempData);
                             return true;
                         }
                         break;
                     }
-                    Thread.Sleep(10);  //Even removing the sleep did not give faster resend.
+                    Thread.Sleep(10);  //Removing the sleep did not give faster resend.
                 }
 
                 return false;
             }
-            catch
-            {//TODO: Add handled exception reporter
+            catch(TimeoutException e)
+            {
+                return false;
+            }
+            catch(Exception e)
+            {
                 receiveBytes.Clear();
                 return false;
             }
@@ -175,8 +164,9 @@ namespace Steinsvik.Star
                 serialPort.Close();
                 $"Serial port {portName} closed.".AddAppEvent(level: Debug.Level.Detail);
             }
-            catch
-            { //TODO: Add handled exception handler
+            catch (Exception e)
+            {
+                e.AddHandledExeption($"Could not close serial port {portName}.", level: Debug.Level.Normal);
                 return false;
             }
             return true;
@@ -189,30 +179,5 @@ namespace Steinsvik.Star
                 return serialPort.IsOpen;
             }
         }
-
-        //void serialIO_DataReceived(object sender, SerialDataReceivedEventArgs e)
-        //{
-        //    ReceivedBytesThreshold
-
-        //    //Initialize a buffer to hold the received data
-        //    byte[] buffer = new byte[_serialPort.ReadBufferSize];
-
-        //    //There is no accurate method for checking how many bytes are read
-        //    //unless you check the return from the Read method
-        //    int bytesRead = _serialPort.Read(buffer, 0, buffer.Length);
-
-        //    //For the example assume the data we are received is ASCII data.
-        //    tString += Encoding.ASCII.GetString(buffer, 0, bytesRead);
-        //    //Check if string contains the terminator
-        //    if (tString.IndexOf((char)_terminator) > -1)
-        //    {
-        //        //If tString does contain terminator we cannot assume that it is the last character received
-        //        string workingString = tString.Substring(0, tString.IndexOf((char)_terminator));
-        //        //Remove the data up to the terminator from tString
-        //        tString = tString.Substring(tString.IndexOf((char)_terminator));
-        //        //Do something with workingString
-        //        Console.WriteLine(workingString);
-        //    }
-        //}
     }
 }
