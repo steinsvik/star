@@ -57,20 +57,13 @@ namespace Steinsvik.Star
             this.userSettingsSet = true;
         }
 
-        public bool Open()
+        public bool TryOpen()
         {
             try
             {
-                serialPort.DataBits = this.dataBits;
-                serialPort.Handshake = this.handshake;
-                serialPort.Parity = this.parity;
-                serialPort.PortName = this.portName;
-                serialPort.StopBits = this.stopBits;
-                serialPort.BaudRate = this.baudRate;
-                serialPort.Open();
-                $"Serial port {portName} opened.".AddAppEvent($"Baudrate: {baudRate} Databits: {dataBits} Handshake: {handshake} Parity: {parity} Stopbits: {stopBits}.",Debug.Level.Detail);
+                Open();
             }
-            catch(Exception e)
+            catch (Exception e)
             {
                 e.AddHandledExeption($"Could not open serial port {portName}.", level: Debug.Level.Detail);
                 return false;
@@ -78,39 +71,77 @@ namespace Steinsvik.Star
             return true;
         }
 
-        public bool WriteStringReadStringFixedSize(List<byte> sendBytes, int numbBytesToReceive, out List<byte> receiveBytes, int timeoutms = 50)
+        private void Open()
         {
+            serialPort.DataBits = this.dataBits;
+            serialPort.Handshake = this.handshake;
+            serialPort.Parity = this.parity;
+            serialPort.PortName = this.portName;
+            serialPort.StopBits = this.stopBits;
+            serialPort.BaudRate = this.baudRate;
+            serialPort.Open();
+            $"Serial port {portName} opened.".AddAppEvent($"Baudrate: {baudRate} Databits: {dataBits} Handshake: {handshake} Parity: {parity} Stopbits: {stopBits}.", Debug.Level.Detail);
+        }
 
-            // receiveBytes = "";
-            //char[] test = sendString.ToCharArray();
-            if (!WriteString(sendBytes, true, true, timeoutms))
+        public bool TryWriteStringReadStringFixedSize(List<byte> sendBytes, int numbBytesToReceive, out List<byte> receiveBytes, int timeoutms = 50)
+        {
+            if (!TryWriteData(sendBytes, true, true, timeoutms))
             {
                 receiveBytes = new List<byte>();
                 return false;
             }
-            return (ReadStringFixedSize(numbBytesToReceive, out receiveBytes, timeoutms));
+            return (TryReadDataFixedLength(numbBytesToReceive, out receiveBytes, timeoutms));
         }
 
-        public bool WriteString(List<byte> sendBytes, bool clearTxBuffer = true, bool clearRxBuffer = true, int timeoutms = 50)
+        public bool WriteStringReadStringFixedSize(List<byte> sendBytes, int numbBytesToReceive, out List<byte> receiveBytes, int timeoutms = 50)
+        {
+            if (!WriteData(sendBytes, true, true, timeoutms))
+            {
+                receiveBytes = new List<byte>();
+                return false;
+            }
+            return (ReadDataFixedLength(numbBytesToReceive, out receiveBytes, timeoutms));
+        }
+
+        public bool TryWriteData(List<byte> sendBytes, bool clearTxBuffer = true, bool clearRxBuffer = true, int timeoutms = 50)
         {
             try
             {
-                serialPort.WriteTimeout = timeoutms;
-
-                if (clearTxBuffer)
-                    serialPort.DiscardOutBuffer();
-                if (clearRxBuffer)
-                    serialPort.DiscardInBuffer();
-                serialPort.Write(sendBytes.ToArray(), 0, sendBytes.Count());
+                WriteData(sendBytes, clearTxBuffer, clearRxBuffer, timeoutms);
             }
-            catch
-            { 
+            catch (Exception e)
+            {
+                e.AddHandledExeption("Error while writing to serial port.", "Data tried " + sendBytes.ToArray().ToHexBytesString(), level: Debug.Level.Normal);
                 return false;
             }
             return true;
         }
 
-        public bool ReadStringFixedSize(int numbBytes, out List<byte> receiveBytes, int timeoutms = 50)
+        private bool WriteData(List<byte> sendBytes, bool clearTxBuffer = true, bool clearRxBuffer = true, int timeoutms = 50)
+        {
+            serialPort.WriteTimeout = timeoutms;
+            if (clearTxBuffer)
+                serialPort.DiscardOutBuffer();
+            if (clearRxBuffer)
+                serialPort.DiscardInBuffer();
+            serialPort.Write(sendBytes.ToArray(), 0, sendBytes.Count());
+            return true;
+        }
+
+        public bool TryReadDataFixedLength(int numbBytes, out List<byte> receiveBytes, int timeoutms = 50)
+        {
+            try
+            {
+                return ReadDataFixedLength(numbBytes, out receiveBytes, timeoutms);
+            }
+            catch (Exception e)
+            {
+                e.AddHandledExeption($"Error while reading fixed length data ({numbBytes}) serial port.", level: Debug.Level.Normal);
+                receiveBytes = new List<byte>();
+                return false;
+            }
+        }
+        public bool ReadDataFixedLength(int numbBytes, out List<byte> receiveBytes, int timeoutms = 50)
         {
             int numbRes;
             DateTime endTime;
@@ -118,9 +149,7 @@ namespace Steinsvik.Star
 
             receiveBytes = new List<byte>();
 
-            //char[] tempData = new char[numbBytes];
             byte[] tempData = new byte[numbBytes];
-            //char[] tempCharData;
             try
             {
                 serialPort.ReadTimeout = actualTimeoutMS - 20;
@@ -143,26 +172,58 @@ namespace Steinsvik.Star
                     }
                     Thread.Sleep(10);  //Removing the sleep did not give faster resend.
                 }
-
                 return false;
             }
             catch(TimeoutException e)
             {
                 return false;
             }
-            catch(Exception e)
-            {
-                receiveBytes.Clear();
-                return false;
-            }
         }
 
-        public bool Close()
+        public List<byte> ReadAnyAvailableData()
+        {
+            int numbRes;
+            var receiveBytes = new List<byte>();
+
+            serialPort.ReadTimeout = 1;
+            serialPort.DiscardNull = false;
+            serialPort.ReceivedBytesThreshold = 1;
+            int numbRead = serialPort.BytesToRead;
+            if (numbRead >= 0)
+            {
+                byte[] tempData = new byte[numbRead];
+                numbRes = serialPort.Read(tempData, 0, numbRead);
+                receiveBytes.AddRange(tempData);
+                return receiveBytes;
+            }
+            return receiveBytes;
+            // Should not be any timeout in that numb bytes is checked beforehand.
+        }
+
+        public bool ReadAnyAvailableData(out List<byte> receiveBytes)
+        {
+            receiveBytes = ReadAnyAvailableData();
+            return (receiveBytes.Count >= 1);
+        }
+        public bool TryReadAnyAvailableData(out List<byte> receiveBytes)
         {
             try
             {
-                serialPort.Close();
-                $"Serial port {portName} closed.".AddAppEvent(level: Debug.Level.Detail);
+                receiveBytes = new List<byte>();
+                return ReadAnyAvailableData(out receiveBytes);
+            }
+            catch (Exception e)
+            {
+                e.AddHandledExeption("Error while reading all available data from serial port.", level: Debug.Level.Normal);
+                receiveBytes = new List<byte>();
+                return false;
+            }
+        }
+        public bool TryClose()
+        {
+            try
+            {
+                Close();
             }
             catch (Exception e)
             {
@@ -170,6 +231,12 @@ namespace Steinsvik.Star
                 return false;
             }
             return true;
+        }
+
+        public void Close()
+        {
+            serialPort.Close();
+            $"Serial port {portName} closed.".AddAppEvent(level: Debug.Level.Detail);
         }
 
         public bool IsOpen
