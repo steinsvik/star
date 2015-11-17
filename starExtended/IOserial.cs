@@ -46,7 +46,7 @@ namespace Steinsvik.Star
             get { return userSettingsSet; }
         }
 
-        public void setSerialSettings(int baudrate, int databits = 8, StopBits stopBits = StopBits.One,
+        public void SetSerialSettings(int baudrate, int databits = 8, StopBits stopBits = StopBits.One,
              Parity parity = Parity.None, Handshake handshake = Handshake.None)
         {
             this.baudRate = baudrate;
@@ -71,7 +71,7 @@ namespace Steinsvik.Star
             return true;
         }
 
-        private void Open()
+        public virtual void Open()
         {
             serialPort.DataBits = this.dataBits;
             serialPort.Handshake = this.handshake;
@@ -141,6 +141,7 @@ namespace Steinsvik.Star
                 return false;
             }
         }
+
         public bool ReadDataFixedLength(int numbBytes, out List<byte> receiveBytes, int timeoutms = 50)
         {
             int numbRes;
@@ -205,6 +206,7 @@ namespace Steinsvik.Star
             receiveBytes = ReadAnyAvailableData();
             return (receiveBytes.Count >= 1);
         }
+
         public bool TryReadAnyAvailableData(out List<byte> receiveBytes)
         {
             try
@@ -219,6 +221,7 @@ namespace Steinsvik.Star
                 return false;
             }
         }
+
         public bool TryClose()
         {
             try
@@ -233,7 +236,7 @@ namespace Steinsvik.Star
             return true;
         }
 
-        public void Close()
+        public virtual void Close()
         {
             serialPort.Close();
             $"Serial port {portName} closed.".AddAppEvent(level: Debug.Level.Detail);
@@ -245,6 +248,82 @@ namespace Steinsvik.Star
             {
                 return serialPort.IsOpen;
             }
+        }
+    }
+    public class SerialIOwithListener : SerialIO
+    { 
+
+        const int serialListenerSleeptimeMS = 1;
+        bool serialListenerThreadShouldStop = false;
+        Thread serialListenerThread;
+        public delegate bool ExiseRelevantStringDelegate(List<byte> sourceBytes, out List<byte> resultBytes, out List<byte> remainingBytes, out List<byte> discarededBytes);
+        private ExiseRelevantStringDelegate exiseRelevantStringFunction;
+
+        public int MaxBufferSize { get; set; } = 100;
+
+        override public void Open()
+        {
+            base.Open();
+
+            serialListenerThreadShouldStop = false;
+            serialListenerThread = new Thread(new ThreadStart(SerialListenerThread));
+            serialListenerThread.IsBackground = true;
+            serialListenerThread.Start();
+        }
+
+        public void Open(ExiseRelevantStringDelegate exiseRelevantStringFunction)
+        {
+            base.Open();
+
+            serialListenerThreadShouldStop = false;
+            serialListenerThread = new Thread(new ThreadStart(SerialListenerThread));
+            serialListenerThread.IsBackground = true;
+            serialListenerThread.Start();
+        }
+
+        private bool DefaultExiseRelevantStringFunction(List<byte> sourceBytes, out List<byte> resultBytes, out List<byte> remainingBytes, out List<byte> discarededBytes)
+        {
+            resultBytes = new List<byte>();
+            discarededBytes = new List<byte>();
+            remainingBytes = new List<byte>();
+
+            //Add custiom info for decode. Length, start, stop checksum, 
+        }
+
+        override public void Close()
+        {
+            serialListenerThreadShouldStop = true;
+            // base.Close();
+        }
+
+        private void SerialListenerThread()
+        {
+            try
+            {
+                List<byte> innBuffer = new List<byte>();
+                while (true)
+                {
+                    List<byte> receiveBytes = new List<byte>();
+                    if(ReadAnyAvailableData(out receiveBytes))
+                    {
+                        innBuffer.AddRange(receiveBytes);
+                    }
+                    if (serialListenerThreadShouldStop)
+                    {
+                        break;
+                    }
+                    if (innBuffer.Count >= MaxBufferSize)
+                    {
+                        innBuffer.RemoveRange(0, innBuffer.Count - MaxBufferSize);
+                    }
+                    Thread.Sleep(serialListenerSleeptimeMS);
+                }
+            }
+            catch
+            {
+                serialListenerThreadShouldStop = false;
+            }
+            serialListenerThreadShouldStop = false;
         }
     }
 }
