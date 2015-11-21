@@ -537,9 +537,9 @@ namespace Steinsvik.Star
             Exception e = (Exception)args.ExceptionObject;
             Debug.AddFatalUnhandledExeption(e);
             // Allow time to write
-            Thread.Sleep(2);
+            Thread.Sleep(1000);
 
-            Process.GetCurrentProcess().Kill();
+            //Process.GetCurrentProcess().Kill();
         }
         #endregion
     }
